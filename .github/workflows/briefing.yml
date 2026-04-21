@@ -1,0 +1,27 @@
+name: Daily Briefing (08:30 Taipei)
+
+on:
+  schedule:
+    # 00:30 UTC = 08:30 Taipei. 每天都推
+    - cron: "30 0 * * *"
+  workflow_dispatch:  # 手動觸發用
+
+jobs:
+  briefing:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Run briefing
+        env:
+          GMAIL_EMAIL: ${{ secrets.GMAIL_EMAIL }}
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          TZ: Asia/Taipei
+        run: python3 scripts/briefing.py
