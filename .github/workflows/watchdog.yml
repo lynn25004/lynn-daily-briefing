@@ -1,13 +1,15 @@
-name: Daily Briefing (08:30 Taipei)
+name: Watchdog (briefing catch-up)
 
 on:
   schedule:
-    # 00:30 UTC = 08:30 Taipei. 每天都推
-    - cron: "30 0 * * *"
-  workflow_dispatch:  # 手動觸發用
+    # 09:00 Taipei 專門補晨報（主排程 08:30 Taipei，給 30 分鐘 buffer）
+    - cron: "0 1 * * *"
+    # 每小時 10 分跑後備檢查（09:10 ~ 23:10 Taipei）
+    - cron: "10 1-15 * * *"
+  workflow_dispatch:
 
 jobs:
-  briefing:
+  watchdog:
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -18,7 +20,7 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Run briefing
+      - name: Check & catch-up
         env:
           GMAIL_EMAIL: ${{ secrets.GMAIL_EMAIL }}
           GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
@@ -26,17 +28,17 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           TZ: Asia/Taipei
-        run: python3 scripts/briefing.py
+        run: python3 scripts/watchdog.py
 
-      - name: Commit pushed marker
+      - name: Commit any new markers
         run: |
-          git config user.name  "briefing-bot"
+          git config user.name  "watchdog-bot"
           git config user.email "bot@users.noreply.github.com"
           git add logs/
           if ! git diff --cached --quiet; then
             DATE=$(TZ=Asia/Taipei date +%Y-%m-%d)
-            git commit -m "briefing: pushed $DATE"
+            git commit -m "watchdog: catch-up $DATE"
             git push
           else
-            echo "No marker changes to commit."
+            echo "No changes to commit."
           fi

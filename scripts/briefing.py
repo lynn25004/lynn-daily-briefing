@@ -19,7 +19,12 @@ import re
 import sys
 import time
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from urllib import request, parse, error
+
+ROOT = Path(__file__).resolve().parent.parent
+LOGS_DIR = ROOT / "logs"
+LOGS_DIR.mkdir(exist_ok=True)
 
 
 # --- Config -------------------------------------------------------------------
@@ -299,6 +304,12 @@ def main() -> None:
 
     print("📤 推 Telegram...")
     telegram_send(msg)
+
+    # 寫入完成標記（watchdog 用來判斷今天是否已推）
+    today = datetime.now(TAIPEI).strftime("%Y-%m-%d")
+    (LOGS_DIR / f"{today}.pushed.txt").write_text(
+        datetime.now(TAIPEI).isoformat(), encoding="utf-8"
+    )
     print("✅ 完成")
 
 
