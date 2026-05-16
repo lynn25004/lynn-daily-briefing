@@ -143,28 +143,47 @@ def fetch_gmail_summary() -> dict:
         M.logout()
 
 
+def _urlopen_with_retry(req_or_url, *, timeout=15, attempts=3, retry_on_5xx=True):
+    """通用 retry：5xx / timeout / URLError 重試（指數退避 2s/4s/8s）。"""
+    last = None
+    for i in range(1, attempts + 1):
+        try:
+            return request.urlopen(req_or_url, timeout=timeout)
+        except error.HTTPError as e:
+            last = e
+            if not retry_on_5xx or e.code < 500:
+                raise
+        except (error.URLError, TimeoutError) as e:
+            last = e
+        if i < attempts:
+            time.sleep(2 ** i)
+    raise last
+
+
 # --- Weather (Open-Meteo, 免費無需 API key) ------------------------------------
 def fetch_weather() -> str:
     url = (
         f"https://api.open-meteo.com/v1/forecast"
         f"?latitude={TAICHUNG_LAT}&longitude={TAICHUNG_LON}"
-        f"&current=temperature_2m,weather_code,precipitation"
-        f"&daily=temperature_2m_max,temperature_2m_min,precipitation_probability_max"
+        f"&current=temperature_2m,apparent_temperature,weather_code,precipitation"
+        f"&daily=temperature_2m_max,temperature_2m_min,precipitation_probability_max,uv_index_max"
         f"&timezone=Asia%2FTaipei&forecast_days=1"
     )
     try:
-        with request.urlopen(url, timeout=15) as resp:
+        with _urlopen_with_retry(url, timeout=15) as resp:
             data = json.loads(resp.read().decode("utf-8"))
-    except (error.URLError, TimeoutError) as e:
+    except Exception as e:
         return f"🌤️ 天氣：取得失敗（{e}）"
 
     cur = data.get("current", {})
     daily = data.get("daily", {})
     t_now = cur.get("temperature_2m")
+    t_feel = cur.get("apparent_temperature")
     code = cur.get("weather_code", 0)
     t_max = (daily.get("temperature_2m_max") or [None])[0]
     t_min = (daily.get("temperature_2m_min") or [None])[0]
     rain = (daily.get("precipitation_probability_max") or [0])[0]
+    uv = (daily.get("uv_index_max") or [None])[0]
 
     # 簡化天氣代碼
     desc = {
@@ -177,12 +196,32 @@ def fetch_weather() -> str:
         95: "⛈️ 雷雨", 96: "⛈️ 雷雨", 99: "⛈️ 強雷雨",
     }.get(code, "🌤️ 未知")
 
-    umbrella = "☂️ 記得帶傘！" if rain and rain >= 50 else ""
-    return (
-        f"{desc}　現在 {t_now}°C\n"
-        f"今日 {t_min}°C ~ {t_max}°C　降雨機率 {rain}%\n"
-        f"{umbrella}".strip()
-    )
+    # 雨機率 40% 起就提醒（台灣午後雷陣雨常 40-60%）
+    umbrella = "☂️ 記得帶傘！" if rain and rain >= 40 else ""
+
+    # UV 提示：>=8 高、>=11 極端
+    uv_hint = ""
+    if uv is not None:
+        if uv >= 11:
+            uv_hint = f"☣️ UV {uv:.0f} 極端，盡量避免戶外"
+        elif uv >= 8:
+            uv_hint = f"🧴 UV {uv:.0f} 偏高，記得防曬"
+        elif uv >= 6:
+            uv_hint = f"🧴 UV {uv:.0f}"
+
+    # 體感差異 >=3°C 才提（差不多就不囉嗦）
+    feel_part = ""
+    if t_feel is not None and t_now is not None and abs(t_feel - t_now) >= 3:
+        feel_part = f"（體感 {t_feel}°C）"
+
+    parts = [
+        f"{desc}　現在 {t_now}°C{feel_part}",
+        f"今日 {t_min}°C ~ {t_max}°C　降雨機率 {rain}%",
+    ]
+    extras = " ".join(p for p in [umbrella, uv_hint] if p)
+    if extras:
+        parts.append(extras)
+    return "\n".join(parts)
 
 
 # --- Motivational quote (Gemini) ----------------------------------------------
@@ -204,13 +243,14 @@ def gemini_quote() -> str:
     url = f"{GEMINI_URL}?key={parse.quote(api_key)}"
     req = request.Request(url, data=body, headers={"Content-Type": "application/json"}, method="POST")
     try:
-        with request.urlopen(req, timeout=30) as resp:
+        with _urlopen_with_retry(req, timeout=30, attempts=3) as resp:
             payload = json.loads(resp.read().decode("utf-8"))
         text = payload["candidates"][0]["content"]["parts"][0]["text"].strip()
         # 去掉多餘引號
         text = text.strip('「」""\'\' ')
         return text or "今天也要加油！💪"
-    except Exception:
+    except Exception as e:
+        print(f"⚠️  Gemini 失敗（{e}），使用 fallback")
         return "今天也要加油！💪"
 
 
@@ -231,12 +271,14 @@ def telegram_send(text: str) -> None:
     }).encode("utf-8")
     req = request.Request(url, data=body, method="POST")
     try:
-        with request.urlopen(req, timeout=30) as resp:
+        with _urlopen_with_retry(req, timeout=30, attempts=3) as resp:
             resp_body = resp.read().decode("utf-8")
             if resp.status >= 300:
                 sys.exit(f"❌ Telegram 失敗 ({resp.status})：{resp_body}")
     except error.HTTPError as e:
         sys.exit(f"❌ Telegram HTTP {e.code}: {e.read().decode('utf-8', 'ignore')}")
+    except Exception as e:
+        sys.exit(f"❌ Telegram 推播失敗：{e}")
 
 
 # --- Formatter ----------------------------------------------------------------
